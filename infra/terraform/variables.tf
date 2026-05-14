@@ -24,24 +24,36 @@ variable "purpose_tag" {
 
 variable "container_image" {
   type        = string
-  description = "ECR image URI including tag (e.g. 123456789012.dkr.ecr.us-east-1.amazonaws.com/redshift-mcp:v1)."
+  description = "ECR image URI including tag (Lambda package_type=Image)."
 }
 
-variable "container_port" {
+variable "lambda_memory_mb" {
   type        = number
-  description = "Container listen port (must match MCP_PORT / Dockerfile EXPOSE)."
-  default     = 8000
+  description = "Lambda memory (MB)."
+  default     = 1024
 }
 
-variable "desired_count" {
+variable "lambda_timeout_seconds" {
   type        = number
-  description = "Fargate desired task count."
-  default     = 1
+  description = "Lambda timeout (seconds); should exceed worst-case Redshift query time."
+  default     = 120
+}
+
+variable "lambda_subnet_ids" {
+  type        = list(string)
+  description = "Optional VPC subnets for Lambda (use with lambda_security_group_ids when Redshift is VPC-only)."
+  default     = []
+}
+
+variable "lambda_security_group_ids" {
+  type        = list(string)
+  description = "Optional security groups for Lambda (pair with lambda_subnet_ids)."
+  default     = []
 }
 
 variable "mcp_public_url" {
   type        = string
-  description = "Public base URL of the MCP server (must match ALB URL + path clients use; Auth0 resource metadata)."
+  description = "HTTPS base URL clients use (Auth0 protected resource metadata). For Function URL, set to the URL from terraform output after first image deploy, then apply again if it changed."
 }
 
 variable "auth0_domain" {
@@ -62,7 +74,7 @@ variable "auth0_tier_claim" {
 
 variable "mcp_allowed_hosts" {
   type        = list(string)
-  description = "Optional Host header allowlist entries (e.g. my-alb.us-east-1.elb.amazonaws.com:80)."
+  description = "Optional extra Host header allowlist entries. If empty, Host is derived from mcp_public_url when possible."
   default     = []
 }
 
@@ -93,7 +105,7 @@ variable "redshift_user" {
 
 variable "redshift_iam" {
   type        = bool
-  description = "When true, use IAM database auth (no REDSHIFT_PASSWORD secret)."
+  description = "When true, use IAM database auth (no Secrets Manager DB password)."
   default     = false
 
   validation {
@@ -118,7 +130,7 @@ variable "redshift_aws_region" {
 
 variable "redshift_password_secret_arn" {
   type        = string
-  description = "Secrets Manager ARN holding REDSHIFT_PASSWORD (required when redshift_iam=false)."
+  description = "Secrets Manager ARN for the DB password (plain string secret). Lambda reads at cold start via REDSHIFT_PASSWORD_SECRET_ARN; not used when redshift_iam=true."
   default     = ""
 
   validation {

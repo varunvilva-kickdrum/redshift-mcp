@@ -12,6 +12,8 @@ provider "aws" {
   region = var.aws_region
 }
 
+data "aws_caller_identity" "current" {}
+
 locals {
   common_tags = {
     Name    = "${var.project_name}-stack"
@@ -19,72 +21,35 @@ locals {
     Purpose = var.purpose_tag
   }
 
-  mcp_environment = concat(
-    [
-      { name = "MCP_TRANSPORT", value = "streamable-http" },
-      { name = "MCP_HOST", value = "0.0.0.0" },
-      { name = "MCP_PORT", value = tostring(var.container_port) },
-      { name = "MCP_JSON_RESPONSE", value = "true" },
-      { name = "MCP_PUBLIC_URL", value = var.mcp_public_url },
-      { name = "AUTH0_DOMAIN", value = var.auth0_domain },
-      { name = "AUTH0_AUDIENCE", value = var.auth0_audience },
-      { name = "AUTH0_TIER_CLAIM", value = var.auth0_tier_claim },
-      { name = "RATE_LIMIT_DYNAMODB_TABLE", value = aws_dynamodb_table.rate_limit.name },
-      { name = "RATE_LIMIT_AWS_REGION", value = var.aws_region },
-      { name = "REDSHIFT_PORT", value = tostring(var.redshift_port) },
-      { name = "REDSHIFT_DATABASE", value = var.redshift_database },
-      { name = "REDSHIFT_USER", value = var.redshift_user },
-      { name = "REDSHIFT_IAM", value = var.redshift_iam ? "true" : "false" },
-    ],
-    var.redshift_host != "" ? [{ name = "REDSHIFT_HOST", value = var.redshift_host }] : [],
-    var.redshift_iam ? [
-      { name = "REDSHIFT_CLUSTER_IDENTIFIER", value = var.redshift_cluster_identifier },
-      { name = "REDSHIFT_AWS_REGION", value = var.redshift_aws_region },
-    ] : [],
-    length(var.mcp_allowed_hosts) > 0 ? [{ name = "MCP_ALLOWED_HOSTS", value = join(",", var.mcp_allowed_hosts) }] : [],
-    length(var.mcp_allowed_origins) > 0 ? [{ name = "MCP_ALLOWED_ORIGINS", value = join(",", var.mcp_allowed_origins) }] : [],
-  )
+  # Host header for FastMCP transport security (no port for default HTTPS).
+  mcp_host_from_public_url = trimspace(try(regex("https?://([^/]+)", var.mcp_public_url)[0], ""))
 
-  mcp_container = merge(
+  mcp_environment = merge(
     {
-      name      = "mcp"
-      image     = var.container_image
-      essential = true
-      portMappings = [{
-        containerPort = var.container_port
-        hostPort        = var.container_port
-        protocol        = "tcp"
-      }]
-      logConfiguration = {
-        logDriver = "awslogs"
-        options = {
-          awslogs-group         = aws_cloudwatch_log_group.mcp.name
-          awslogs-region        = var.aws_region
-          awslogs-stream-prefix = "mcp"
-        }
-      }
-      environment = local.mcp_environment
+      MCP_TRANSPORT       = "streamable-http"
+      MCP_JSON_RESPONSE   = "true"
+      MCP_PUBLIC_URL      = var.mcp_public_url
+      AUTH0_DOMAIN        = var.auth0_domain
+      AUTH0_AUDIENCE      = var.auth0_audience
+      AUTH0_TIER_CLAIM    = var.auth0_tier_claim
+      RATE_LIMIT_DYNAMODB_TABLE = aws_dynamodb_table.rate_limit.name
+      RATE_LIMIT_AWS_REGION     = var.aws_region
+      REDSHIFT_PORT         = tostring(var.redshift_port)
+      REDSHIFT_DATABASE     = var.redshift_database
+      REDSHIFT_USER         = var.redshift_user
+      REDSHIFT_IAM          = var.redshift_iam ? "true" : "false"
     },
-    var.redshift_iam ? {} : {
-      secrets = [
-        {
-          name      = "REDSHIFT_PASSWORD"
-          valueFrom = var.redshift_password_secret_arn
-        }
-      ]
-    },
+    var.redshift_host != "" ? { REDSHIFT_HOST = var.redshift_host } : {},
+    var.redshift_iam ? {
+      REDSHIFT_CLUSTER_IDENTIFIER = var.redshift_cluster_identifier
+      REDSHIFT_AWS_REGION         = var.redshift_aws_region
+    } : {},
+    length(var.mcp_allowed_hosts) > 0 ? { MCP_ALLOWED_HOSTS = join(",", var.mcp_allowed_hosts) } : (
+      local.mcp_host_from_public_url != "" ? { MCP_ALLOWED_HOSTS = local.mcp_host_from_public_url } : {}
+    ),
+    length(var.mcp_allowed_origins) > 0 ? { MCP_ALLOWED_ORIGINS = join(",", var.mcp_allowed_origins) } : {},
+    var.redshift_iam ? {} : { REDSHIFT_PASSWORD_SECRET_ARN = var.redshift_password_secret_arn },
   )
-}
-
-data "aws_vpc" "default" {
-  default = true
-}
-
-data "aws_subnets" "default" {
-  filter {
-    name   = "vpc-id"
-    values = [data.aws_vpc.default.id]
-  }
 }
 
 resource "aws_dynamodb_table" "rate_limit" {
@@ -105,15 +70,10 @@ resource "aws_dynamodb_table" "rate_limit" {
   tags = merge(local.common_tags, { Name = "${var.project_name}-mcp-rate" })
 }
 
-resource "aws_cloudwatch_log_group" "mcp" {
-  name              = "/ecs/${var.project_name}-mcp"
+resource "aws_cloudwatch_log_group" "lambda_mcp" {
+  name              = "/aws/lambda/${var.project_name}-mcp"
   retention_in_days = 14
-  tags              = merge(local.common_tags, { Name = "${var.project_name}-mcp-logs" })
-}
-
-resource "aws_ecs_cluster" "this" {
-  name = "${var.project_name}-mcp"
-  tags = merge(local.common_tags, { Name = "${var.project_name}-ecs-cluster" })
+  tags              = merge(local.common_tags, { Name = "${var.project_name}-lambda-logs" })
 }
 
 resource "aws_ecr_repository" "mcp" {
@@ -122,135 +82,38 @@ resource "aws_ecr_repository" "mcp" {
   tags                 = merge(local.common_tags, { Name = "${var.project_name}-ecr" })
 }
 
-resource "aws_security_group" "alb" {
-  name_prefix = "${var.project_name}-alb-"
-  vpc_id      = data.aws_vpc.default.id
-  description = "ALB for MCP HTTP"
-
-  ingress {
-    from_port   = 80
-    to_port     = 80
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  egress {
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  tags = merge(local.common_tags, { Name = "${var.project_name}-alb-sg" })
-}
-
-resource "aws_security_group" "svc" {
-  name_prefix = "${var.project_name}-svc-"
-  vpc_id      = data.aws_vpc.default.id
-  description = "MCP Fargate tasks"
-
-  ingress {
-    from_port       = var.container_port
-    to_port         = var.container_port
-    protocol        = "tcp"
-    security_groups = [aws_security_group.alb.id]
-  }
-
-  egress {
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  tags = merge(local.common_tags, { Name = "${var.project_name}-task-sg" })
-}
-
-resource "aws_lb" "this" {
-  name               = "${var.project_name}-mcp"
-  load_balancer_type = "application"
-  security_groups    = [aws_security_group.alb.id]
-  subnets            = data.aws_subnets.default.ids
-
-  tags = merge(local.common_tags, { Name = "${var.project_name}-alb" })
-}
-
-resource "aws_lb_target_group" "mcp" {
-  name        = substr("${var.project_name}-mcp", 0, 32)
-  port        = var.container_port
-  protocol    = "HTTP"
-  vpc_id      = data.aws_vpc.default.id
-  target_type = "ip"
-
-  health_check {
-    path                = "/healthz"
-    healthy_threshold   = 2
-    unhealthy_threshold = 3
-    timeout             = 5
-    interval            = 30
-    matcher             = "200"
-  }
-
-  tags = merge(local.common_tags, { Name = "${var.project_name}-tg" })
-}
-
-resource "aws_lb_listener" "http" {
-  load_balancer_arn = aws_lb.this.arn
-  port              = 80
-  protocol          = "HTTP"
-
-  default_action {
-    type             = "forward"
-    target_group_arn = aws_lb_target_group.mcp.arn
-  }
-}
-
-data "aws_iam_policy_document" "task_assume" {
+data "aws_iam_policy_document" "lambda_assume" {
   statement {
     actions = ["sts:AssumeRole"]
     principals {
       type        = "Service"
-      identifiers = ["ecs-tasks.amazonaws.com"]
+      identifiers = ["lambda.amazonaws.com"]
     }
   }
 }
 
-resource "aws_iam_role" "execution" {
-  name_prefix        = "${var.project_name}-exec-"
-  assume_role_policy = data.aws_iam_policy_document.task_assume.json
-  tags               = merge(local.common_tags, { Name = "${var.project_name}-exec-role" })
+resource "aws_iam_role" "lambda" {
+  name_prefix        = "${var.project_name}-lambda-"
+  assume_role_policy = data.aws_iam_policy_document.lambda_assume.json
+  tags               = merge(local.common_tags, { Name = "${var.project_name}-lambda-role" })
 }
 
-resource "aws_iam_role_policy_attachment" "execution_managed" {
-  role       = aws_iam_role.execution.name
-  policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
+resource "aws_iam_role_policy_attachment" "lambda_basic" {
+  role       = aws_iam_role.lambda.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
 }
 
-resource "aws_iam_role_policy" "execution_secrets" {
-  count = var.redshift_iam ? 0 : 1
-  name  = "${var.project_name}-read-db-secret"
-  role  = aws_iam_role.execution.id
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [{
-      Effect   = "Allow"
-      Action   = ["secretsmanager:GetSecretValue"]
-      Resource = var.redshift_password_secret_arn
-    }]
-  })
+resource "aws_iam_role_policy_attachment" "lambda_vpc" {
+  count      = length(var.lambda_subnet_ids) > 0 && length(var.lambda_security_group_ids) > 0 ? 1 : 0
+  role       = aws_iam_role.lambda.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole"
 }
 
-resource "aws_iam_role" "task" {
-  name_prefix        = "${var.project_name}-task-"
-  assume_role_policy = data.aws_iam_policy_document.task_assume.json
-  tags               = merge(local.common_tags, { Name = "${var.project_name}-task-role" })
-}
-
-data "aws_iam_policy_document" "task_policy" {
+data "aws_iam_policy_document" "lambda_policy" {
   statement {
     sid     = "Logs"
     actions = ["logs:CreateLogStream", "logs:PutLogEvents"]
-    resources = ["${aws_cloudwatch_log_group.mcp.arn}:*"]
+    resources = ["${aws_cloudwatch_log_group.lambda_mcp.arn}:*"]
   }
   statement {
     sid = "RateLimit"
@@ -262,46 +125,94 @@ data "aws_iam_policy_document" "task_policy" {
   }
 }
 
-resource "aws_iam_role_policy" "task" {
-  name_prefix = "${var.project_name}-task-"
-  role        = aws_iam_role.task.id
-  policy      = data.aws_iam_policy_document.task_policy.json
+resource "aws_iam_role_policy" "lambda_core" {
+  name_prefix = "${var.project_name}-lambda-"
+  role        = aws_iam_role.lambda.id
+  policy      = data.aws_iam_policy_document.lambda_policy.json
 }
 
-resource "aws_ecs_task_definition" "mcp" {
-  family                   = "${var.project_name}-mcp"
-  requires_compatibilities = ["FARGATE"]
-  network_mode             = "awsvpc"
-  cpu                      = "512"
-  memory                   = "1024"
-  execution_role_arn       = aws_iam_role.execution.arn
-  task_role_arn            = aws_iam_role.task.arn
-
-  container_definitions = jsonencode([local.mcp_container])
-
-  tags = merge(local.common_tags, { Name = "${var.project_name}-taskdef" })
+resource "aws_iam_role_policy" "lambda_secrets" {
+  count = var.redshift_iam ? 0 : 1
+  name  = "${var.project_name}-read-db-secret"
+  role  = aws_iam_role.lambda.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect   = "Allow"
+      Action   = ["secretsmanager:GetSecretValue"]
+      Resource = var.redshift_password_secret_arn
+    }]
+  })
 }
 
-resource "aws_ecs_service" "mcp" {
-  name            = "${var.project_name}-mcp"
-  cluster         = aws_ecs_cluster.this.id
-  task_definition = aws_ecs_task_definition.mcp.arn
-  desired_count   = var.desired_count
-  launch_type     = "FARGATE"
+resource "aws_iam_role_policy" "lambda_redshift_iam" {
+  count = var.redshift_iam ? 1 : 0
+  name  = "${var.project_name}-redshift-dbuser"
+  role  = aws_iam_role.lambda.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect = "Allow"
+      Action = [
+        "redshift:GetClusterCredentials",
+        "redshift:DescribeClusters",
+      ]
+      Resource = [
+        "arn:aws:redshift:${var.aws_region}:${data.aws_caller_identity.current.account_id}:dbname:${var.redshift_cluster_identifier}/*",
+        "arn:aws:redshift:${var.aws_region}:${data.aws_caller_identity.current.account_id}:cluster:${var.redshift_cluster_identifier}",
+      ]
+    }]
+  })
+}
 
-  network_configuration {
-    subnets          = data.aws_subnets.default.ids
-    security_groups  = [aws_security_group.svc.id]
-    assign_public_ip = true
+resource "aws_lambda_function" "mcp" {
+  function_name = "${var.project_name}-mcp"
+  role          = aws_iam_role.lambda.arn
+  package_type  = "Image"
+  image_uri     = var.container_image
+  timeout       = var.lambda_timeout_seconds
+  memory_size   = var.lambda_memory_mb
+
+  logging_config {
+    log_format = "Text"
+    log_group  = aws_cloudwatch_log_group.lambda_mcp.name
   }
 
-  load_balancer {
-    target_group_arn = aws_lb_target_group.mcp.arn
-    container_name   = "mcp"
-    container_port   = var.container_port
+  image_config {
+    command = ["redshift_mcp.lambda_handler.handler"]
   }
 
-  depends_on = [aws_lb_listener.http, aws_iam_role_policy_attachment.execution_managed]
+  dynamic "vpc_config" {
+    for_each = length(var.lambda_subnet_ids) > 0 && length(var.lambda_security_group_ids) > 0 ? [1] : []
+    content {
+      subnet_ids         = var.lambda_subnet_ids
+      security_group_ids = var.lambda_security_group_ids
+    }
+  }
 
-  tags = merge(local.common_tags, { Name = "${var.project_name}-ecs-service" })
+  environment {
+    variables = local.mcp_environment
+  }
+
+  tags = merge(local.common_tags, { Name = "${var.project_name}-lambda" })
+
+  depends_on = [
+    aws_iam_role_policy_attachment.lambda_basic,
+    aws_cloudwatch_log_group.lambda_mcp,
+  ]
+}
+
+resource "aws_lambda_function_url" "mcp" {
+  function_name      = aws_lambda_function.mcp.function_name
+  authorization_type = "NONE"
+  invoke_mode        = "BUFFERED"
+
+  cors {
+    # Wildcard origins are incompatible with allow_credentials=true on Function URLs.
+    allow_credentials = false
+    allow_origins     = ["*"]
+    allow_methods     = ["*"]
+    allow_headers     = ["*"]
+    max_age           = 86400
+  }
 }

@@ -112,9 +112,9 @@ Prerequisites: **AWS account**, **Docker** (recommended), **Terraform >= 1.5**, 
 See [`.env.example`](.env.example). Minimum for authenticated HTTP:
 
 - `MCP_TRANSPORT=streamable-http`, `MCP_PUBLIC_URL` (must match the client-facing URL), `AUTH0_DOMAIN`, `AUTH0_AUDIENCE`, `AUTH0_TIER_CLAIM` (claim whose string value is `free`, `premium`, or `analyst`), Redshift variables.
-- `MCP_ALLOWED_HOSTS` — comma list of allowed `Host` values (e.g. `my-alb.us-east-1.elb.amazonaws.com:80`). For local dev only: `MCP_RELAX_TRANSPORT_SECURITY=true`.
+- `MCP_ALLOWED_HOSTS` — comma list of allowed `Host` values (Terraform derives this from `mcp_public_url` when you leave the list empty). For local dev only: `MCP_RELAX_TRANSPORT_SECURITY=true`.
 - `MCP_ALLOWED_ORIGINS` — optional comma list of allowed `Origin` headers.
-- `RATE_LIMIT_DYNAMODB_TABLE` + `RATE_LIMIT_AWS_REGION` — optional; omit for in-process limits, set for shared limits across multiple Fargate tasks (table created by Terraform).
+- `RATE_LIMIT_DYNAMODB_TABLE` + `RATE_LIMIT_AWS_REGION` — optional; omit for in-process limits, set for shared limits across Lambda invocations (table created by Terraform). DynamoDB is reached over the AWS network without a VPC; if you place the function in a **VPC** for private Redshift, add a **DynamoDB gateway VPC endpoint** (or NAT) so rate limiting keeps working without routing public internet from private subnets.
 
 Tier matrix: **Free** — catalog tools; **Premium** — adds sampling/profiling/size; **Analyst** — adds `run_select_query`. Limits: **30 / 150 / 500** tool calls per JWT `sub` per UTC hour. Stale **cache** may be returned on upstream errors when a prior response exists.
 
@@ -136,30 +136,40 @@ docker run --rm -p 8000:8000 --env-file .env redshift-mcp:latest
 
 ### AWS (Terraform)
 
-In `infra/terraform/`: copy `terraform.tfvars.example` → `terraform.tfvars`, set **ECR image**, **Auth0**, **Redshift**, **`mcp_public_url`** to `http(s)://<alb_dns>` (no path), **tags**, then `terraform init && terraform apply`.
+In `infra/terraform/`: copy `terraform.tfvars.example` → `terraform.tfvars`, set **ECR image**, **Auth0**, **Redshift**, **`mcp_public_url`** (must match the HTTPS URL clients use — typically the **Lambda function URL** from `terraform output mcp_function_url`), **`redshift_password_secret_arn`** (Secrets Manager secret with the DB password; not stored in Lambda env), **tags**, then `terraform init && terraform apply`.
 
-Provisions **ECR**, **DynamoDB** rate table, **ALB→Fargate**, **ECS service**, **CloudWatch logs**, **IAM** (task + execution). Tag every resource: **`Name`**, **`Creator`**, **`Purpose`**. Open **Redshift inbound** to the task security group after apply; **push** the container to ECR and set `container_image`.
+Provisions **ECR**, **DynamoDB** rate table, **Lambda** (container image), **Lambda function URL** (HTTPS), **CloudWatch** log group, **IAM** (Lambda role). Tag every resource: **`Name`**, **`Creator`**, **`Purpose`**. Allow **Redshift** inbound from the Lambda **security group** if the function runs in a VPC; without VPC, use a publicly reachable cluster or other network path consistent with your security model.
 
-Rough steady-state cost: **ALB + Fargate + DynamoDB on-demand + logs** — typically **tens of USD/month** at low traffic (no NAT if tasks stay in public subnets).
+If you previously applied the older **ECS/ALB** Terraform from this repo, start from a **fresh Terraform state** or a **new workspace** before applying this Lambda configuration (resource addresses and types changed).
+
+**`mcp_public_url`**: set to the same value as `mcp_function_url` output (no trailing slash). If you change the function URL configuration, update this variable and re-apply so Auth0 protected-resource metadata stays aligned.
+
+**Why a Lambda function URL (not API Gateway HTTP API)** here: Auth0 and tier checks already run in the FastMCP app, so an API Gateway authorizer is redundant; a function URL is fewer billable parts and the same Mangum/HTTP v2 event shape. Switching to HTTP API later is straightforward if you need edge features (WAF, usage plans).
+
+**Streaming / Lambda**: the server defaults to **`MCP_JSON_RESPONSE=true`**, which yields normal buffered HTTP JSON bodies — compatible with Mangum and Lambda’s synchronous **buffered** invoke mode (`BUFFERED` on the function URL). True SSE/chunked streamable responses are constrained on Lambda (payload size and streaming invoke modes vary by integration); if you disable JSON mode, expect to validate payload sizes and client behavior separately.
+
+Rough steady-state cost: **Lambda per request + DynamoDB on-demand + logs + ECR storage** — typically **low single-digit to tens of USD/month** at low traffic versus always-on ALB + Fargate.
 
 ### Architecture
 
 ```mermaid
 flowchart LR
-  Client[Claude / Cursor] -->|HTTPS + Bearer JWT| ALB[ALB :80]
-  ALB --> Fargate[ECS Fargate :8000]
-  Fargate --> Auth0[Auth0 JWKS]
-  Fargate --> Cache[TTL tool cache]
-  Fargate --> DDB[(DynamoDB limits)]
-  Fargate --> RS[(Redshift)]
-  Fargate --> CW[CloudWatch Logs]
+  Client[Claude / Cursor] -->|HTTPS + Bearer JWT| URL[Lambda function URL]
+  URL --> Lambda[Lambda container]
+  Lambda --> Auth0[Auth0 JWKS]
+  Lambda --> Cache[TTL tool cache]
+  Lambda --> DDB[(DynamoDB limits)]
+  Lambda --> RS[(Redshift)]
+  Lambda --> CW[CloudWatch Logs]
 ```
 
 ### Notes (PDF-aligned)
 
-- **Transport**: FastMCP `streamable-http` + JSON responses; HTTP **429** + **`Retry-After`** for rate limits (via ASGI middleware on JSON-RPC `-32029`).
+The assignment PDF lists **EC2 or Lambda** as hosting options on AWS (“Lambda — with whatever supporting services you need alongside it”). This stack uses **Lambda + DynamoDB + Secrets Manager** accordingly.
+
+- **Transport**: FastMCP `streamable-http` with **JSON** responses and **buffered** function URL invoke mode; HTTP **429** + **`Retry-After`** for rate limits (ASGI middleware on JSON-RPC `-32029`).
 - **Auth0**: RS256; tier embedded as `tier:<value>` in synthetic scopes for gating.
-- **What broke in deploy**: typical issues are **Host header** / **Origin** rejection (fix `MCP_ALLOWED_HOSTS`), **Redshift SG** not allowing the task SG, or **Secrets Manager ARN** not granted to the execution role.
+- **What broke in deploy**: typical issues are **Host header** / **Origin** rejection (fix `MCP_PUBLIC_URL` / `MCP_ALLOWED_HOSTS`), **Redshift SG** not allowing the Lambda SG (VPC case), or **Secrets Manager ARN** / IAM for `GetSecretValue`.
 
 ## Settings (environment variables)
 

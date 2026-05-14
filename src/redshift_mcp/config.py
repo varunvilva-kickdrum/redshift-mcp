@@ -11,6 +11,25 @@ from pydantic import AnyHttpUrl, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
+def _secret_string_from_arn(arn: str) -> str:
+    """Load a Secrets Manager secret string (used on Lambda instead of injecting the password)."""
+    import boto3
+    from botocore.exceptions import ClientError
+
+    region = (os.getenv("AWS_REGION") or os.getenv("RATE_LIMIT_AWS_REGION") or "us-east-1").strip()
+    client = boto3.client("secretsmanager", region_name=region)
+    try:
+        resp = client.get_secret_value(SecretId=arn)
+    except ClientError as e:
+        msg = f"Failed to read REDSHIFT_PASSWORD_SECRET_ARN: {e}"
+        raise ValueError(msg) from e
+    s = resp.get("SecretString")
+    if isinstance(s, str) and s.strip():
+        return s
+    msg = "Secrets Manager response had no SecretString"
+    raise ValueError(msg)
+
+
 def _find_project_root() -> Path:
     """Directory containing pyproject.toml (repo root), for stable .env loading."""
     here = Path(__file__).resolve().parent
@@ -60,6 +79,10 @@ class Settings(BaseSettings):
     redshift_database: str = Field(alias="REDSHIFT_DATABASE")
     redshift_user: str = Field(alias="REDSHIFT_USER")
     redshift_password: str | None = Field(default=None, alias="REDSHIFT_PASSWORD")
+    redshift_password_secret_arn: str | None = Field(
+        default=None,
+        alias="REDSHIFT_PASSWORD_SECRET_ARN",
+    )
 
     redshift_iam: bool = Field(default=False, alias="REDSHIFT_IAM")
     redshift_cluster_identifier: str | None = Field(
@@ -137,8 +160,16 @@ class Settings(BaseSettings):
                 msg = "REDSHIFT_AWS_REGION is required when REDSHIFT_IAM=true."
                 raise ValueError(msg)
         else:
-            if not self.redshift_password:
-                msg = "REDSHIFT_PASSWORD is required when REDSHIFT_IAM=false."
+            pw = (self.redshift_password or "").strip()
+            arn = (self.redshift_password_secret_arn or "").strip()
+            if not pw and arn:
+                object.__setattr__(self, "redshift_password", _secret_string_from_arn(arn))
+                pw = (self.redshift_password or "").strip()
+            if not pw:
+                msg = (
+                    "REDSHIFT_PASSWORD or REDSHIFT_PASSWORD_SECRET_ARN is required "
+                    "when REDSHIFT_IAM=false."
+                )
                 raise ValueError(msg)
             if not self.redshift_host or not self.redshift_host.strip():
                 msg = "REDSHIFT_HOST is required when REDSHIFT_IAM=false."

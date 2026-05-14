@@ -19,3 +19,14 @@ jobs:
         run: uv run ruff check .
       - name: Pytest
         run: uv run pytest
+
+  terraform:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.5.0"
+      - name: Validate
+        working-directory: infra/terraform
+        run: terraform init -backend=false -input=false && terraform validate

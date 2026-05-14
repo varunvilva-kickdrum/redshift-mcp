@@ -33,7 +33,12 @@ from redshift_mcp.safety import UnsafeQueryError, validate_query
 from redshift_mcp.tiers import TierName, normalize_tier, tool_allowed
 from redshift_mcp.tool_cache import TOOL_CACHE_TTL_SEC, ToolResultCache, cache_key
 
-LOG_PATH = Path.cwd() / "redshift_mcp.log"
+
+def _log_file_path() -> Path:
+    # Lambda's filesystem is read-only except /tmp; keep audit file writable there.
+    if os.getenv("AWS_LAMBDA_FUNCTION_NAME"):
+        return Path("/tmp") / "redshift_mcp.log"
+    return Path.cwd() / "redshift_mcp.log"
 
 TIER_FORBIDDEN = -32030
 
@@ -320,7 +325,7 @@ def setup_logging() -> logging.Logger:
     logger.setLevel(logging.INFO)
     fmt = logging.Formatter("%(asctime)s %(levelname)s %(message)s")
 
-    fh = logging.FileHandler(LOG_PATH, encoding="utf-8")
+    fh = logging.FileHandler(_log_file_path(), encoding="utf-8")
     fh.setFormatter(fmt)
     logger.addHandler(fh)
 
