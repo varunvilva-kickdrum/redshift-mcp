@@ -1,0 +1,13 @@
+# Copy to terraform.tfvars (gitignored) and fill real values.
+aws_region          = "us-east-1"
+creator_tag         = "your.name"
+purpose_tag         = "redshift-mcp-remote"
+container_image     = "123456789012.dkr.ecr.us-east-1.amazonaws.com/redshift-mcp:v1"
+mcp_public_url      = "http://your-alb-dns.elb.amazonaws.com"
+auth0_domain        = "dev-xxxx.us.auth0.com"
+auth0_audience      = "https://your-api-audience/"
+redshift_database   = "analytics"
+redshift_user       = "mcp_readonly"
+redshift_host       = "your-cluster.abc123.us-east-1.redshift.amazonaws.com"
+redshift_iam        = false
+redshift_password_secret_arn = "arn:aws:secretsmanager:us-east-1:123456789012:secret:redshift-mcp-db-xxxxx"
