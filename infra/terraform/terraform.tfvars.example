@@ -3,10 +3,11 @@ aws_region   = "us-east-1"
 creator_tag  = "your.name"
 purpose_tag  = "redshift-mcp-remote"
 container_image = "123456789012.dkr.ecr.us-east-1.amazonaws.com/redshift-mcp:v1"
-# After first image push, set to terraform output mcp_function_url (HTTPS, no trailing slash).
-mcp_public_url = "https://xxxxxxxx.lambda-url.us-east-1.on.aws"
+# Function URL + /mcp (no trailing slash). Must match Claude/Cursor connector URL exactly.
+mcp_public_url = "https://xxxxxxxx.lambda-url.us-east-1.on.aws/mcp"
 auth0_domain   = "dev-xxxx.us.auth0.com"
-auth0_audience = "https://your-api-audience/"
+# Must match mcp_public_url exactly (MCP resource / JWT audience for URL-only clients).
+auth0_audience = "https://xxxxxxxx.lambda-url.us-east-1.on.aws/mcp"
 redshift_database = "analytics"
 redshift_user     = "mcp_readonly"
 redshift_host     = "your-cluster.abc123.us-east-1.redshift.amazonaws.com"

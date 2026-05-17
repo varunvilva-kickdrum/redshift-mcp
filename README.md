@@ -71,6 +71,53 @@ Equivalent using the script entry:
 
 Restart Claude Desktop after saving.
 
+### Remote MCP (Lambda + Auth0) — Claude and Cursor
+
+Remote MCP is **not** configured in `claude_desktop_config.json` (that file is for **local stdio** only).
+
+Clients only need the **MCP URL** (same as `mcp_public_url`). OAuth uses each client’s built-in third-party flow (e.g. Cursor `tpc_…`); you do **not** put `CLIENT_ID` / `CLIENT_SECRET` in client config when Auth0 is set up as below.
+
+**MCP URL** (example — use your function URL + `/mcp`, no trailing slash):
+
+`https://xxx.lambda-url.us-east-1.on.aws/mcp`
+
+#### Auth0 (one-time tenant setup)
+
+1. **Settings → Advanced → Resource Parameter Compatibility Profile** → **ON** (required for MCP `resource=` parameter).
+2. **Applications → APIs → Create API** with **Identifier** exactly equal to your MCP URL (same string as `mcp_public_url` / `auth0_audience` in Terraform).
+3. On that API → **Default Permissions for Third Party Apps** → authorize **User-Delegated Access** (so Cursor/Claude can connect without a custom OAuth app).
+4. **Authentication → [your connection, e.g. Google] → Promote connection to domain level** (required for third-party clients).
+5. **Actions → Post Login** → deploy an action that sets custom claim `https://redshift-mcp/tier` from `user.app_metadata.tier` (`free` | `premium` | `analyst`). Attach it to the **Login** flow.
+6. Set per-user tier: **User Management → Users → app_metadata** e.g. `{ "tier": "analyst" }`. Users must **re-authenticate** the MCP connector after tier changes.
+
+Optional: **Settings → API Authorization → Default Audience** = same MCP URL. Do **not** disable the Resource Parameter profile for MCP clients.
+
+For a **dedicated Native app** (optional): add callback `https://claude.ai/api/mcp/auth_callback` (Claude) or `cursor://anysphere.cursor-mcp/oauth/callback` (Cursor) and pass Client ID/Secret in the connector’s **Advanced** settings only if you are not using third-party defaults above.
+
+#### Claude (browser)
+
+1. Open [Customize → Connectors](https://claude.ai/customize/connectors) (Team owners add the connector at [Admin → Connectors](https://claude.ai/admin-settings/connectors) first).
+2. **Add custom connector** → paste the MCP URL → **Add** → **Connect** → complete Auth0 login.
+3. In chat: **+** → **Connectors** → enable your connector.
+
+Claude connects from **Anthropic’s cloud**, not your laptop — the Lambda URL must be public.
+
+#### Cursor
+
+In **Settings → MCP** or `~/.cursor/mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "redshift": {
+      "url": "https://xxx.lambda-url.us-east-1.on.aws/mcp"
+    }
+  }
+}
+```
+
+Reconnect the server and complete Auth0 when prompted.
+
 ## Cursor configuration
 
 Add an MCP server in **Cursor Settings → MCP**, or create `.cursor/mcp.json` in this repo:
@@ -111,7 +158,7 @@ Prerequisites: **AWS account**, **Docker** (recommended), **Terraform >= 1.5**, 
 
 See [`.env.example`](.env.example). Minimum for authenticated HTTP:
 
-- `MCP_TRANSPORT=streamable-http`, `MCP_PUBLIC_URL` (must match the client-facing URL), `AUTH0_DOMAIN`, `AUTH0_AUDIENCE`, `AUTH0_TIER_CLAIM` (claim whose string value is `free`, `premium`, or `analyst`), Redshift variables.
+- `MCP_TRANSPORT=streamable-http`, `MCP_PUBLIC_URL` (client-facing URL including `/mcp`), `AUTH0_DOMAIN`, `AUTH0_AUDIENCE` (**must equal `MCP_PUBLIC_URL`** for URL-only MCP OAuth), `AUTH0_TIER_CLAIM` (claim whose string value is `free`, `premium`, or `analyst`), Redshift variables.
 - `MCP_ALLOWED_HOSTS` — comma list of allowed `Host` values (Terraform derives this from `mcp_public_url` when you leave the list empty). For local dev only: `MCP_RELAX_TRANSPORT_SECURITY=true`.
 - `MCP_ALLOWED_ORIGINS` — optional comma list of allowed `Origin` headers.
 - `RATE_LIMIT_DYNAMODB_TABLE` + `RATE_LIMIT_AWS_REGION` — optional; omit for in-process limits, set for shared limits across Lambda invocations (table created by Terraform). DynamoDB is reached over the AWS network without a VPC; if you place the function in a **VPC** for private Redshift, add a **DynamoDB gateway VPC endpoint** (or NAT) so rate limiting keeps working without routing public internet from private subnets.
@@ -142,7 +189,7 @@ Provisions **ECR**, **DynamoDB** rate table, **Lambda** (container image), **Lam
 
 If you previously applied the older **ECS/ALB** Terraform from this repo, start from a **fresh Terraform state** or a **new workspace** before applying this Lambda configuration (resource addresses and types changed).
 
-**`mcp_public_url`**: set to the same value as `mcp_function_url` output (no trailing slash). If you change the function URL configuration, update this variable and re-apply so Auth0 protected-resource metadata stays aligned.
+**`mcp_public_url`** and **`auth0_audience`**: set both to `mcp_function_url` output **plus `/mcp`** (no trailing slash), e.g. `https://xxx.lambda-url.us-east-1.on.aws/mcp`. Users enter this exact URL in Claude/Cursor (URL only). Re-apply after the function URL changes so JWT validation and Auth0 API identifier stay aligned.
 
 **Why a Lambda function URL (not API Gateway HTTP API)** here: Auth0 and tier checks already run in the FastMCP app, so an API Gateway authorizer is redundant; a function URL is fewer billable parts and the same Mangum/HTTP v2 event shape. Switching to HTTP API later is straightforward if you need edge features (WAF, usage plans).
 

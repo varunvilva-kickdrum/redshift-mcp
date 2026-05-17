@@ -76,7 +76,8 @@ def _transport_security_from_env() -> TransportSecuritySettings:
 def _auth_bundle() -> tuple[AuthSettings | None, Auth0JWTVerifier | None]:
     domain = (os.getenv("AUTH0_DOMAIN") or "").strip()
     audience = (os.getenv("AUTH0_AUDIENCE") or "").strip()
-    public_url = (os.getenv("MCP_PUBLIC_URL") or "").strip()
+    # Must match the MCP URL users enter in Claude/Cursor exactly (include /mcp path; no trailing slash).
+    public_url = (os.getenv("MCP_PUBLIC_URL") or "").strip().rstrip("/")
     tier_claim = (os.getenv("AUTH0_TIER_CLAIM") or "https://redshift-mcp/tier").strip()
     if not (domain and audience and public_url):
         return None, None

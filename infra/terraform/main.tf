@@ -26,18 +26,19 @@ locals {
 
   mcp_environment = merge(
     {
-      MCP_TRANSPORT       = "streamable-http"
-      MCP_JSON_RESPONSE   = "true"
-      MCP_PUBLIC_URL      = var.mcp_public_url
-      AUTH0_DOMAIN        = var.auth0_domain
-      AUTH0_AUDIENCE      = var.auth0_audience
-      AUTH0_TIER_CLAIM    = var.auth0_tier_claim
+      MCP_TRANSPORT             = "streamable-http"
+      MCP_STATELESS_HTTP        = "true"
+      MCP_JSON_RESPONSE         = "true"
+      MCP_PUBLIC_URL            = var.mcp_public_url
+      AUTH0_DOMAIN              = var.auth0_domain
+      AUTH0_AUDIENCE            = var.auth0_audience
+      AUTH0_TIER_CLAIM          = var.auth0_tier_claim
       RATE_LIMIT_DYNAMODB_TABLE = aws_dynamodb_table.rate_limit.name
       RATE_LIMIT_AWS_REGION     = var.aws_region
-      REDSHIFT_PORT         = tostring(var.redshift_port)
-      REDSHIFT_DATABASE     = var.redshift_database
-      REDSHIFT_USER         = var.redshift_user
-      REDSHIFT_IAM          = var.redshift_iam ? "true" : "false"
+      REDSHIFT_PORT             = tostring(var.redshift_port)
+      REDSHIFT_DATABASE         = var.redshift_database
+      REDSHIFT_USER             = var.redshift_user
+      REDSHIFT_IAM              = var.redshift_iam ? "true" : "false"
     },
     var.redshift_host != "" ? { REDSHIFT_HOST = var.redshift_host } : {},
     var.redshift_iam ? {
@@ -111,8 +112,8 @@ resource "aws_iam_role_policy_attachment" "lambda_vpc" {
 
 data "aws_iam_policy_document" "lambda_policy" {
   statement {
-    sid     = "Logs"
-    actions = ["logs:CreateLogStream", "logs:PutLogEvents"]
+    sid       = "Logs"
+    actions   = ["logs:CreateLogStream", "logs:PutLogEvents"]
     resources = ["${aws_cloudwatch_log_group.lambda_mcp.arn}:*"]
   }
   statement {
@@ -158,7 +159,9 @@ resource "aws_iam_role_policy" "lambda_redshift_iam" {
         "redshift:DescribeClusters",
       ]
       Resource = [
-        "arn:aws:redshift:${var.aws_region}:${data.aws_caller_identity.current.account_id}:dbname:${var.redshift_cluster_identifier}/*",
+        # GetClusterCredentials requires dbuser + dbname ARNs (cluster alone is not enough).
+        "arn:aws:redshift:${var.aws_region}:${data.aws_caller_identity.current.account_id}:dbuser:${var.redshift_cluster_identifier}/${var.redshift_user}",
+        "arn:aws:redshift:${var.aws_region}:${data.aws_caller_identity.current.account_id}:dbname:${var.redshift_cluster_identifier}/${var.redshift_database}",
         "arn:aws:redshift:${var.aws_region}:${data.aws_caller_identity.current.account_id}:cluster:${var.redshift_cluster_identifier}",
       ]
     }]
@@ -196,9 +199,11 @@ resource "aws_lambda_function" "mcp" {
 
   tags = merge(local.common_tags, { Name = "${var.project_name}-lambda" })
 
+  # Terraform requires a static depends_on list here (no dynamic concat).
   depends_on = [
     aws_iam_role_policy_attachment.lambda_basic,
     aws_cloudwatch_log_group.lambda_mcp,
+    aws_iam_role_policy.lambda_core,
   ]
 }
 
@@ -211,8 +216,10 @@ resource "aws_lambda_function_url" "mcp" {
     # Wildcard origins are incompatible with allow_credentials=true on Function URLs.
     allow_credentials = false
     allow_origins     = ["*"]
-    allow_methods     = ["*"]
-    allow_headers     = ["*"]
-    max_age           = 86400
+    # Lambda Function URL CORS: each method name must be <= 6 chars (OPTIONS is invalid).
+    # MCP streamable-http uses POST; GET for health. Omit OPTIONS (browser preflight may still work for simple clients).
+    allow_methods = ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD"]
+    allow_headers = ["*"]
+    max_age       = 86400
   }
 }

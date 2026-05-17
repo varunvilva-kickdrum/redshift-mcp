@@ -53,7 +53,7 @@ variable "lambda_security_group_ids" {
 
 variable "mcp_public_url" {
   type        = string
-  description = "HTTPS base URL clients use (Auth0 protected resource metadata). For Function URL, set to the URL from terraform output after first image deploy, then apply again if it changed."
+  description = "Public MCP endpoint URL (function URL + /mcp, no trailing slash). Must match exactly what users enter in Claude Connectors. Example: https://xxx.lambda-url.us-east-1.on.aws/mcp"
 }
 
 variable "auth0_domain" {
@@ -91,8 +91,8 @@ variable "redshift_host" {
 }
 
 variable "redshift_port" {
-  type        = number
-  default     = 5439
+  type    = number
+  default = 5439
 }
 
 variable "redshift_database" {
@@ -118,8 +118,8 @@ variable "redshift_iam" {
 }
 
 variable "redshift_cluster_identifier" {
-  type        = string
-  default     = ""
+  type    = string
+  default = ""
 }
 
 variable "redshift_aws_region" {
