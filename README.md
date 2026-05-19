@@ -188,15 +188,11 @@ docker build --platform linux/amd64 --provenance=false --sbom=false \
   -t 123456789012.dkr.ecr.us-east-1.amazonaws.com/redshift-mcp:v5 .
 ```
 
-Or use `./scripts/deploy-image.sh v5` (build, push, update `terraform.tfvars`, targeted `terraform apply`).
-
 ### AWS (Terraform)
 
 In `infra/terraform/`: copy `terraform.tfvars.example` → `terraform.tfvars`, set **ECR image**, **Auth0**, **Redshift**, **`mcp_public_url`** (must match the HTTPS URL clients use — typically the **Lambda function URL** from `terraform output mcp_function_url`), **`redshift_password_secret_arn`** (Secrets Manager secret with the DB password; not stored in Lambda env), **tags**, then `terraform init && terraform apply`.
 
 Provisions **ECR**, **DynamoDB** rate table, **Lambda** (container image), **Lambda function URL** (HTTPS), **CloudWatch** log group, **IAM** (Lambda role). Tag every resource: **`Name`**, **`Creator`**, **`Purpose`**. Allow **Redshift** inbound from the Lambda **security group** if the function runs in a VPC; without VPC, use a publicly reachable cluster or other network path consistent with your security model.
-
-If you previously applied the older **ECS/ALB** Terraform from this repo, start from a **fresh Terraform state** or a **new workspace** before applying this Lambda configuration (resource addresses and types changed).
 
 **`mcp_public_url`** and **`auth0_audience`**: set both to `mcp_function_url` output **plus `/mcp`** (no trailing slash), e.g. `https://xxx.lambda-url.us-east-1.on.aws/mcp`. Users enter this exact URL in Claude/Cursor (URL only). Re-apply after the function URL changes so JWT validation and Auth0 API identifier stay aligned.
 
@@ -219,13 +215,11 @@ flowchart LR
   Lambda --> CW[CloudWatch Logs]
 ```
 
-### Notes (PDF-aligned)
+### Implementation Notes
 
-The assignment PDF lists **EC2 or Lambda** as hosting options on AWS (“Lambda — with whatever supporting services you need alongside it”). This stack uses **Lambda + DynamoDB + Secrets Manager** accordingly.
-
-- **Transport**: FastMCP `streamable-http` with **JSON** responses and **buffered** function URL invoke mode; HTTP **429** + **`Retry-After`** for rate limits (ASGI middleware on JSON-RPC `-32029`).
-- **Auth0**: RS256; tier embedded as `tier:<value>` in synthetic scopes for gating.
-- **What broke in deploy**: typical issues are **Host header** / **Origin** rejection (fix `MCP_PUBLIC_URL` / `MCP_ALLOWED_HOSTS`), **Redshift SG** not allowing the Lambda SG (VPC case), or **Secrets Manager ARN** / IAM for `GetSecretValue`.
+- **Transport**: FastMCP `streamable-http` with **JSON** responses and **buffered** function URL invoke mode; HTTP **429** + **`Retry-After`** for rate limits; HTTP **403** for tier-forbidden tool calls.
+- **Auth0**: RS256 JWT; tier embedded as `tier:<value>` in synthetic scopes for per-tool gating.
+- **Common deployment issues**: **Host header** / **Origin** rejection (fix `MCP_PUBLIC_URL` / `MCP_ALLOWED_HOSTS`), **Redshift SG** not allowing the Lambda SG (VPC case), or **Secrets Manager ARN** / IAM for `GetSecretValue`.
 
 ## Settings (environment variables)
 
@@ -261,8 +255,7 @@ See [`.env.example`](.env.example) for all keys.
 
 ```bash
 uv sync
-uv run ruff check .
-uv run pytest
+uv run python -m redshift_mcp.server
 ```
 
 ## End-to-end check (with a real `.env`)
@@ -270,10 +263,10 @@ uv run pytest
 After filling in `.env` with a reachable cluster:
 
 ```bash
-uv sync && uv run ruff check . && uv run pytest -q && uv run python -c "from redshift_mcp.config import get_settings; from redshift_mcp.db import RedshiftClient; c=RedshiftClient(get_settings()); print(c.execute('SELECT current_database(), current_user'))"
+uv sync && uv run python -c "from redshift_mcp.config import get_settings; from redshift_mcp.db import RedshiftClient; c=RedshiftClient(get_settings()); print(c.execute('SELECT current_database(), current_user'))"
 ```
 
-This runs lint, tests, and a single read-only query through the same DB layer the MCP tools use.
+This runs a single read-only query through the same DB layer the MCP tools use.
 
 ## License
 

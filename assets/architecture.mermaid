@@ -1,31 +1,83 @@
-%% Redshift MCP — paste into draw.io (Insert → Mermaid) or https://mermaid.live
+%% Redshift MCP — AWS Production Architecture
+%% Paste into draw.io: Insert → Advanced → Edit Diagram → Mermaid
+%% Or open at https://mermaid.live
+
 flowchart LR
-  subgraph external["External"]
-    Client["Claude / Cursor<br/>MCP client"]
-    Auth0["Auth0<br/>OIDC + tier claim"]
+
+  %% ── External Actors ──────────────────────────────────────────────
+  subgraph external["🌐  External"]
+    direction TB
+    C["🖥️  Claude / Cursor\n──────────────────\nMCP Client\nHTTPS · OAuth 2.1 PKCE"]
+    A0["🔐  Auth0\n──────────────────\nOIDC Provider · RS256 JWT\nTier Claim: app_metadata.tier\nfree | premium | analyst"]
   end
 
-  subgraph aws["AWS Account"]
-    URL["Lambda Function URL<br/>/mcp /healthz"]
-    Lambda["Lambda container<br/>FastMCP · Mangum"]
-    ECR["ECR"]
-    DDB[("DynamoDB<br/>rate limits")]
-    SM["Secrets Manager"]
-    CW["CloudWatch Logs"]
+  %% ── AWS Account ──────────────────────────────────────────────────
+  subgraph aws["☁️  AWS Account"]
+    direction TB
 
-    subgraph vpc["VPC optional"]
-      ENI["Lambda ENI"]
-      RS[("Amazon Redshift<br/>read-only")]
+    %% Entry Point
+    URL["🌐  Lambda Function URL\n──────────────────\nHTTPS public endpoint\nPOST /mcp · GET /healthz\nBUFFERED invoke · CORS enabled\nauthorization_type = NONE"]
+
+    %% Lambda internals
+    subgraph lambda["⚡  Lambda Container · Python 3.12 · 1 GB · 120s timeout"]
+      direction TB
+      subgraph pipeline["Request Processing Pipeline"]
+        direction TB
+        P1["① JWT Verify\nRS256 · PyJWKClient\nAuth0 JWKS (cached 1 hr)"]
+        P2["② Tier Gate\nfree → premium → analyst\nHTTP 403 on violation"]
+        P3["③ Rate Limit Check\n30 / 150 / 500 calls per UTC hour\nHTTP 429 + Retry-After on exceed"]
+        P4["④ In-Process TTL Cache\nSHA256 cache key · Stale fallback\nlist_schemas 5 min · queries 1 min"]
+        P5["⑤ sqlglot Safety Layer\nSELECT / UNION only\nBlocks DML · DDL · dangerous fns"]
+        P6["⑥ Tool Handlers\n7 read-only Redshift tools\nparameterized · quoted identifiers"]
+        P7["⑦ Async Audit Logger\nJSON lines → stdout → CloudWatch\nuser · tier · tool · ts · cache_hit · ms"]
+        P1 --> P2 --> P3 --> P4 --> P5 --> P6 --> P7
+      end
+      Mangum["Mangum ASGI Adapter\nHTTP v2 event shape"]
+      Mangum --> pipeline
+    end
+
+    %% AWS Services
+    ECR["📦  Amazon ECR\nContainer Registry\npublic.ecr.aws/lambda/python:3.12 base\nredshift_mcp.lambda_handler.handler"]
+
+    DDB[("⚡  Amazon DynamoDB\n──────────────────\nRate Limit Counters\npk = user_id\nsk = UTC hour bucket\nPAY_PER_REQUEST")]
+
+    SM["🔑  AWS Secrets Manager\n──────────────────\nRedshift DB Password\nRead at cold start\n(password auth mode only)"]
+
+    CW["📋  CloudWatch Logs\n──────────────────\nAudit JSON + Platform Logs\nLog group: /aws/lambda/...\n14-day retention"]
+
+    subgraph vpc["🔒  VPC (optional — private Redshift)"]
+      RS[("🗄️  Amazon Redshift\n──────────────────\nRead-Only Warehouse\nport 5439\nSELECT queries only")]
     end
   end
 
-  Client -->|HTTPS| URL
-  URL --> Lambda
-  Client -.->|OAuth PKCE| Auth0
-  Lambda -.->|JWKS| Auth0
-  Lambda --> DDB
-  Lambda --> SM
-  Lambda --> CW
-  ECR -.->|deploy| Lambda
-  Lambda -->|SQL| RS
-  ENI --> RS
+  %% ── Connections ──────────────────────────────────────────────────
+
+  %% Client → Entry
+  C -->|"HTTPS\nPOST /mcp\nAuthorization: Bearer JWT"| URL
+
+  %% Entry → Lambda
+  URL --> Mangum
+
+  %% Response codes back to client
+  URL -->|"HTTP 403 Tier Forbidden\nHTTP 429 Rate Limited + Retry-After"| C
+
+  %% OAuth flow (dashed = external/async)
+  C <-.->|"OAuth 2.1 PKCE\n① Auth Code Request\n② Access Token Response\n   (tier claim embedded)"| A0
+
+  %% Lambda → Auth0 JWKS
+  pipeline -.->|"JWKS endpoint\n/.well-known/jwks.json\nRS256 key validation"| A0
+
+  %% Lambda → DynamoDB
+  P3 -->|"UpdateItem\nADD call_count :1\nConditionExpression < limit"| DDB
+
+  %% Lambda → Secrets Manager
+  P1 -.->|"GetSecretValue\n(cold start only)"| SM
+
+  %% Lambda → CloudWatch
+  P7 -->|"audit JSON lines\nasync stdout stream"| CW
+
+  %% Lambda → Redshift
+  P6 -->|"Validated SELECT\nparameterized SQL\nstatement_timeout set per query"| RS
+
+  %% ECR → Lambda (deploy path)
+  ECR -.->|"container image\ndocker push → terraform apply"| lambda
