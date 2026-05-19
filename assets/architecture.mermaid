@@ -1,0 +1,31 @@
+%% Redshift MCP — paste into draw.io (Insert → Mermaid) or https://mermaid.live
+flowchart LR
+  subgraph external["External"]
+    Client["Claude / Cursor<br/>MCP client"]
+    Auth0["Auth0<br/>OIDC + tier claim"]
+  end
+
+  subgraph aws["AWS Account"]
+    URL["Lambda Function URL<br/>/mcp /healthz"]
+    Lambda["Lambda container<br/>FastMCP · Mangum"]
+    ECR["ECR"]
+    DDB[("DynamoDB<br/>rate limits")]
+    SM["Secrets Manager"]
+    CW["CloudWatch Logs"]
+
+    subgraph vpc["VPC optional"]
+      ENI["Lambda ENI"]
+      RS[("Amazon Redshift<br/>read-only")]
+    end
+  end
+
+  Client -->|HTTPS| URL
+  URL --> Lambda
+  Client -.->|OAuth PKCE| Auth0
+  Lambda -.->|JWKS| Auth0
+  Lambda --> DDB
+  Lambda --> SM
+  Lambda --> CW
+  ECR -.->|deploy| Lambda
+  Lambda -->|SQL| RS
+  ENI --> RS

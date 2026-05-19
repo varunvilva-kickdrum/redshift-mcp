@@ -1,0 +1,126 @@
+<mxfile host="65bd71144e">
+    <diagram id="redshift-mcp-arch" name="Redshift MCP AWS">
+        <mxGraphModel dx="2933" dy="1362" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1400" pageHeight="960" math="0" shadow="0">
+            <root>
+                <mxCell id="0"/>
+                <mxCell id="1" parent="0"/>
+                <mxCell id="title" value="&lt;b&gt;Redshift MCP - AWS Production Architecture&lt;/b&gt;&lt;br&gt;One Lambda function · Function URL is its HTTPS entry (not a second Lambda)" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;fontSize=14;fontColor=#232F3E;" parent="1" vertex="1">
+                    <mxGeometry x="280" y="12" width="840" height="44" as="geometry"/>
+                </mxCell>
+                <mxCell id="client" value="Claude / Cursor&lt;br&gt;&lt;font style=&quot;font-size:10px&quot;&gt;MCP client · HTTPS + OAuth PKCE&lt;/font&gt;" style="sketch=0;outlineConnect=0;fontColor=#232F3E;gradientColor=none;fillColor=#232F3E;strokeColor=none;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=12;fontStyle=0;aspect=fixed;pointerEvents=1;shape=mxgraph.aws4.user;" parent="1" vertex="1">
+                    <mxGeometry x="10" y="190" width="78" height="78" as="geometry"/>
+                </mxCell>
+                <mxCell id="auth0" value="&lt;b&gt;Auth0&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:10px&quot;&gt;OIDC / JWT&lt;br&gt;tier claim&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontColor=#232F3E;fontSize=11;" parent="1" vertex="1">
+                    <mxGeometry x="-1" y="400" width="100" height="80" as="geometry"/>
+                </mxCell>
+                <mxCell id="aws" value="AWS Account" style="points=[[0,0],[0.25,0],[0.5,0],[0.75,0],[1,0],[1,0.25],[1,0.5],[1,0.75],[1,1],[0.75,1],[0.5,1],[0.25,1],[0,1],[0,0.75],[0,0.5],[0,0.25]];outlineConnect=0;gradientColor=none;html=1;whiteSpace=wrap;fontSize=12;fontStyle=1;container=1;pointerEvents=0;collapsible=0;recursiveResize=0;shape=mxgraph.aws4.group;grIcon=mxgraph.aws4.group_account;strokeColor=#CD2264;fillColor=none;verticalAlign=top;align=left;spacingLeft=30;fontColor=#CD2264;dashed=0;" parent="1" vertex="1">
+                    <mxGeometry x="160" y="72" width="1200" height="780" as="geometry"/>
+                </mxCell>
+                <mxCell id="lambda" value="&lt;b&gt;Lambda (single function)&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:9px&quot;&gt;Function URL: POST /mcp · GET /healthz&lt;br&gt;Container image from ECR · BUFFERED&lt;/font&gt;" style="sketch=0;outlineConnect=0;fontColor=#232F3E;gradientColor=none;fillColor=#ED7100;strokeColor=none;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=11;fontStyle=0;aspect=fixed;pointerEvents=1;shape=mxgraph.aws4.lambda;whiteSpace=wrap;" parent="aws" vertex="1">
+                    <mxGeometry x="75" y="48" width="88" height="88" as="geometry"/>
+                </mxCell>
+                <mxCell id="lambda-detail" value="&lt;b&gt;Runtime (inside Lambda process)&lt;/b&gt;&lt;br&gt;FastMCP + Mangum · streamable-http&lt;br&gt;&lt;br&gt;• Auth0 JWT verify&lt;br&gt;• Tier gate&lt;br&gt;• &lt;b&gt;Tool cache = in-process memory&lt;/b&gt; (per warm container)&lt;br&gt;• sqlglot read-only SELECT&lt;br&gt;• Audit JSON → stdout → CloudWatch" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#FFF8F0;strokeColor=#ED7100;fontColor=#232F3E;fontSize=10;align=left;spacingLeft=6;verticalAlign=top;" vertex="1" parent="aws">
+                    <mxGeometry x="180" y="75" width="280" height="145" as="geometry"/>
+                </mxCell>
+                <mxCell id="ecr" value="Amazon ECR" style="sketch=0;points=[[0,0,0],[0.25,0,0],[0.5,0,0],[0.75,0,0],[1,0,0],[0,1,0],[0.25,1,0],[0.5,1,0],[0.75,1,0],[1,1,0],[0,0.25,0],[0,0.5,0],[0,0.75,0],[1,0.25,0],[1,0.5,0],[1,0.75,0]];outlineConnect=0;fontColor=#232F3E;fillColor=#ED7100;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=11;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.ecr;whiteSpace=wrap;" parent="aws" vertex="1">
+                    <mxGeometry x="85" y="318" width="78" height="78" as="geometry"/>
+                </mxCell>
+                <mxCell id="ddb" value="DynamoDB&lt;br&gt;&lt;font style=&quot;font-size:9px&quot;&gt;rate limits only&lt;br&gt;(not tool cache)&lt;br&gt;pk=user · sk=hour&lt;/font&gt;" style="sketch=0;points=[[0,0,0],[0.25,0,0],[0.5,0,0],[0.75,0,0],[1,0,0],[0,1,0],[0.25,1,0],[0.5,1,0],[0.75,1,0],[1,1,0],[0,0.25,0],[0,0.5,0],[0,0.75,0],[1,0.25,0],[1,0.5,0],[1,0.75,0]];outlineConnect=0;fontColor=#232F3E;fillColor=#C925D1;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=11;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.dynamodb;whiteSpace=wrap;" parent="aws" vertex="1">
+                    <mxGeometry x="620" y="48" width="78" height="78" as="geometry"/>
+                </mxCell>
+                <mxCell id="ddb-region-note" value="Regional (outside VPC)" style="text;html=1;strokeColor=none;fillColor=none;fontSize=9;fontColor=#6d28d9;align=center;" vertex="1" parent="aws">
+                    <mxGeometry x="608" y="128" width="100" height="20" as="geometry"/>
+                </mxCell>
+                <mxCell id="secrets" value="Secrets Manager&lt;br&gt;&lt;font style=&quot;font-size:9px&quot;&gt;DB password at cold start&lt;br&gt;(skip if IAM DB auth)&lt;/font&gt;" style="sketch=0;points=[[0,0,0],[0.25,0,0],[0.5,0,0],[0.75,0,0],[1,0,0],[0,1,0],[0.25,1,0],[0.5,1,0],[0.75,1,0],[1,1,0],[0,0.25,0],[0,0.5,0],[0,0.75,0],[1,0.25,0],[1,0.5,0],[1,0.75,0]];outlineConnect=0;fontColor=#232F3E;fillColor=#DD344C;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=11;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.secrets_manager;whiteSpace=wrap;" parent="aws" vertex="1">
+                    <mxGeometry x="618" y="220" width="78" height="78" as="geometry"/>
+                </mxCell>
+                <mxCell id="vpc" value="VPC (optional — when Redshift is private)" style="points=[[0,0],[0.25,0],[0.5,0],[0.75,0],[1,0],[1,0.25],[1,0.5],[1,0.75],[1,1],[0.75,1],[0.5,1],[0.25,1],[0,1],[0,0.75],[0,0.5],[0,0.25]];outlineConnect=0;gradientColor=none;html=1;whiteSpace=wrap;fontSize=11;fontStyle=0;container=1;pointerEvents=0;collapsible=0;recursiveResize=0;shape=mxgraph.aws4.group;grIcon=mxgraph.aws4.group_vpc2;strokeColor=#8C4FFF;fillColor=none;verticalAlign=top;align=left;spacingLeft=30;fontColor=#AAB7B8;dashed=0;" parent="aws" vertex="1">
+                    <mxGeometry x="190" y="578" width="720" height="200" as="geometry"/>
+                </mxCell>
+                <mxCell id="3" value="" style="edgeStyle=none;html=1;" edge="1" parent="vpc" source="rs" target="vpc-lambda-note">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="rs" value="Amazon Redshift&lt;br&gt;&lt;font style=&quot;font-size:9px&quot;&gt;read-only SELECT · :5439&lt;/font&gt;" style="sketch=0;outlineConnect=0;fontColor=#232F3E;gradientColor=none;fillColor=#C925D1;strokeColor=none;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=11;fontStyle=0;aspect=fixed;pointerEvents=1;shape=mxgraph.aws4.redshift;whiteSpace=wrap;" parent="vpc" vertex="1">
+                    <mxGeometry x="440" y="30" width="78" height="78" as="geometry"/>
+                </mxCell>
+                <mxCell id="vpc-lambda-note" value="When vpc_config is set, this same Lambda gets an ENI in private subnets (not a second function)" style="text;html=1;strokeColor=none;fillColor=none;fontSize=9;fontColor=#8C4FFF;align=left;" vertex="1" parent="vpc">
+                    <mxGeometry x="40" y="40" width="400" height="32" as="geometry"/>
+                </mxCell>
+                <mxCell id="ddb-vpce" value="VPC Gateway Endpoint&lt;br&gt;&lt;font style=&quot;font-size:9px&quot;&gt;(optional)&lt;br&gt;DynamoDB&lt;/font&gt;" style="sketch=0;outlineConnect=0;fontColor=#232F3E;gradientColor=none;fillColor=#8C4FFF;strokeColor=none;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=10;fontStyle=0;aspect=fixed;pointerEvents=1;shape=mxgraph.aws4.endpoints;whiteSpace=wrap;" vertex="1" parent="aws">
+                    <mxGeometry x="520" y="430" width="64" height="64" as="geometry"/>
+                </mxCell>
+                <mxCell id="e5" value="rate limit counters" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=classic;fontSize=10;fontColor=#232F3E;strokeColor=#232F3E;" parent="aws" source="lambda-detail" target="ddb" edge="1">
+                    <mxGeometry relative="1" as="geometry">
+                        <Array as="points">
+                            <mxPoint x="729" y="182"/>
+                        </Array>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="e5b" value="if Lambda in VPC" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;dashed=1;endArrow=classic;fontSize=9;fontColor=#8C4FFF;strokeColor=#8C4FFF;" edge="1" parent="aws" source="cw" target="ddb">
+                    <mxGeometry x="-0.0044" relative="1" as="geometry">
+                        <Array as="points"/>
+                        <mxPoint as="offset"/>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="e5c" value="optional path" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;dashed=1;endArrow=classic;fontSize=9;fontColor=#8C4FFF;strokeColor=#8C4FFF;" edge="1" parent="aws" source="lambda" target="ddb-vpce">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="e6" value="GetSecretValue (cold start)" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=classic;fontSize=9;fontColor=#232F3E;strokeColor=#232F3E;" parent="aws" source="lambda-detail" target="secrets" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="e7" value="logs" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=classic;fontSize=10;fontColor=#232F3E;strokeColor=#232F3E;" parent="aws" source="lambda-detail" target="cw" edge="1">
+                    <mxGeometry relative="1" as="geometry">
+                        <Array as="points">
+                            <mxPoint x="320" y="352"/>
+                            <mxPoint x="559" y="352"/>
+                        </Array>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="e8" value="push image (deploy)" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;dashed=1;endArrow=classic;fontSize=9;fontColor=#879196;strokeColor=#879196;" parent="aws" source="ecr" target="lambda" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="e9" value="SQL read-only (via ENI when in VPC)" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#2E7D32;strokeWidth=2;endArrow=classic;fontSize=9;fontColor=#2E7D32;" parent="aws" source="lambda" target="rs" edge="1">
+                    <mxGeometry relative="1" as="geometry">
+                        <Array as="points">
+                            <mxPoint x="70" y="239"/>
+                            <mxPoint x="70" y="32"/>
+                            <mxPoint x="969" y="32"/>
+                        </Array>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="4" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;dashed=1;endArrow=classic;fontSize=9;fontColor=#8C4FFF;strokeColor=#8C4FFF;" edge="1" parent="aws" source="ddb-vpce" target="cw">
+                    <mxGeometry relative="1" as="geometry">
+                        <mxPoint x="764" y="534" as="sourcePoint"/>
+                        <mxPoint x="840" y="198" as="targetPoint"/>
+                        <Array as="points">
+                            <mxPoint x="840" y="534"/>
+                        </Array>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="cw" value="CloudWatch Logs&lt;br&gt;&lt;font style=&quot;font-size:9px&quot;&gt;Lambda platform + audit JSON&lt;/font&gt;" style="sketch=0;points=[[0,0,0],[0.25,0,0],[0.5,0,0],[0.75,0,0],[1,0,0],[0,1,0],[0.25,1,0],[0.5,1,0],[0.75,1,0],[1,1,0],[0,0.25,0],[0,0.5,0],[0,0.75,0],[1,0.25,0],[1,0.5,0],[1,0.75,0]];outlineConnect=0;fontColor=#232F3E;fillColor=#E7157B;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=11;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.cloudwatch_2;whiteSpace=wrap;" parent="aws" vertex="1">
+                    <mxGeometry x="618" y="350" width="80" height="80" as="geometry"/>
+                </mxCell>
+                <mxCell id="legend" value="&lt;b&gt;Legend&lt;/b&gt;&lt;br&gt;solid = runtime data path&lt;br&gt;dashed = OAuth or image deploy&lt;br&gt;green = read-only SQL&lt;br&gt;purple dashed = optional VPC networking" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#879196;fontSize=10;align=left;spacingLeft=6;fontColor=#232F3E;" parent="1" vertex="1">
+                    <mxGeometry x="70" y="560" width="200" height="88" as="geometry"/>
+                </mxCell>
+                <mxCell id="excluded" value="Not deployed: API Gateway, CloudFront, S3 UI, Redis, second Lambda" style="text;html=1;strokeColor=none;fillColor=none;align=center;fontSize=10;fontColor=#879196;" parent="1" vertex="1">
+                    <mxGeometry x="320" y="900" width="760" height="24" as="geometry"/>
+                </mxCell>
+                <mxCell id="e1" value="HTTPS (Function URL)" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=classic;fontSize=10;fontColor=#232F3E;strokeColor=#232F3E;" parent="1" source="client" target="lambda" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="e3" value="OAuth PKCE" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;dashed=1;endArrow=classic;fontSize=10;fontColor=#879196;strokeColor=#879196;" parent="1" source="client" target="auth0" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="e4" value="fetch JWKS" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;dashed=1;endArrow=classic;fontSize=10;fontColor=#879196;strokeColor=#879196;" parent="1" source="lambda" target="auth0" edge="1">
+                    <mxGeometry relative="1" as="geometry">
+                        <Array as="points">
+                            <mxPoint x="160" y="340"/>
+                            <mxPoint x="90" y="340"/>
+                        </Array>
+                    </mxGeometry>
+                </mxCell>
+            </root>
+        </mxGraphModel>
+    </diagram>
+</mxfile>
