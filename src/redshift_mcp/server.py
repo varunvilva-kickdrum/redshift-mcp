@@ -27,7 +27,11 @@ from redshift_mcp.audit import AuditEvent, configure_audit_logging, emit_audit
 from redshift_mcp.auth0_jwt import Auth0JWTVerifier
 from redshift_mcp.config import Settings, _find_project_root, get_settings
 from redshift_mcp.db import RedshiftClient, quote_ident, validate_identifier
-from redshift_mcp.http_middleware import MCP_RATE_LIMIT_JSONRPC, RateLimitHttp429Middleware
+from redshift_mcp.http_middleware import (
+    MCP_RATE_LIMIT_JSONRPC,
+    MCP_TIER_FORBIDDEN_JSONRPC,
+    RateLimitHttp429Middleware,
+)
 from redshift_mcp.ratelimit import hourly_limiter_for
 from redshift_mcp.safety import UnsafeQueryError, validate_query
 from redshift_mcp.tiers import TierName, normalize_tier, tool_allowed
@@ -39,8 +43,6 @@ def _log_file_path() -> Path:
     if os.getenv("AWS_LAMBDA_FUNCTION_NAME"):
         return Path("/tmp") / "redshift_mcp.log"
     return Path.cwd() / "redshift_mcp.log"
-
-TIER_FORBIDDEN = -32030
 
 _tool_cache: ToolResultCache | None = None
 _tool_cache_lock = threading.Lock()
@@ -142,7 +144,7 @@ class RedshiftProductionMCP(FastMCP):
             )
             raise McpError(
                 ErrorData(
-                    code=TIER_FORBIDDEN,
+                    code=MCP_TIER_FORBIDDEN_JSONRPC,
                     message="This tool is not enabled for your subscription tier.",
                     data={"tier": tier, "tool": name},
                 ),

@@ -6,8 +6,8 @@ import json
 import logging
 import queue
 import threading
-import time
 from dataclasses import dataclass
+from datetime import UTC, datetime
 
 _audit_queue: queue.Queue[str | None] | None = None
 _listener_thread: threading.Thread | None = None
@@ -68,7 +68,7 @@ def emit_audit(event: AuditEvent) -> None:
     q = _ensure_listener()
     payload = {
         "event": "mcp_tool_call",
-        "ts": time.time(),
+        "ts": datetime.now(UTC).isoformat(),
         "user_id": event.user_id,
         "tier": event.tier,
         "tool": event.tool,

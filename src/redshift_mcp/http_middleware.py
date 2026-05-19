@@ -1,4 +1,4 @@
-"""ASGI middleware: map rate-limit JSON-RPC errors to HTTP 429 + Retry-After."""
+"""ASGI middleware: map rate-limit and tier-forbidden JSON-RPC errors to HTTP 429/403."""
 
 from __future__ import annotations
 
@@ -8,6 +8,7 @@ from typing import Any
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 MCP_RATE_LIMIT_JSONRPC = -32029
+MCP_TIER_FORBIDDEN_JSONRPC = -32030
 
 
 class RateLimitHttp429Middleware:
@@ -71,6 +72,22 @@ class RateLimitHttp429Middleware:
                         {
                             "type": "http.response.start",
                             "status": 429,
+                            "headers": headers,
+                            "trailers": False,
+                        },
+                    )
+                    await send({"type": "http.response.body", "body": new_body, "more_body": False})
+                    start_message = None
+                    return
+
+                if code == MCP_TIER_FORBIDDEN_JSONRPC and status == 200:
+                    headers = list(start_message.get("headers") or [])
+                    headers = [(k, v) for (k, v) in headers if k.lower() != b"content-length"]
+                    new_body = json.dumps(parsed).encode("utf-8")
+                    await send(
+                        {
+                            "type": "http.response.start",
+                            "status": 403,
                             "headers": headers,
                             "trailers": False,
                         },

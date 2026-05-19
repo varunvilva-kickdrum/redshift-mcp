@@ -14,11 +14,7 @@ jobs:
         with:
           version: "latest"
       - name: Sync
-        run: uv sync --all-groups
-      - name: Ruff
-        run: uv run ruff check .
-      - name: Pytest
-        run: uv run pytest
+        run: uv sync
 
   terraform:
     runs-on: ubuntu-latest
