@@ -181,6 +181,15 @@ docker build -t redshift-mcp:latest .
 docker run --rm -p 8000:8000 --env-file .env redshift-mcp:latest
 ```
 
+**Lambda / ECR pushes** must be `linux/amd64` and must **not** include BuildKit provenance/SBOM attestations (Lambda rejects the resulting OCI manifest). From the repo root:
+
+```bash
+docker build --platform linux/amd64 --provenance=false --sbom=false \
+  -t 123456789012.dkr.ecr.us-east-1.amazonaws.com/redshift-mcp:v5 .
+```
+
+Or use `./scripts/deploy-image.sh v5` (build, push, update `terraform.tfvars`, targeted `terraform apply`).
+
 ### AWS (Terraform)
 
 In `infra/terraform/`: copy `terraform.tfvars.example` → `terraform.tfvars`, set **ECR image**, **Auth0**, **Redshift**, **`mcp_public_url`** (must match the HTTPS URL clients use — typically the **Lambda function URL** from `terraform output mcp_function_url`), **`redshift_password_secret_arn`** (Secrets Manager secret with the DB password; not stored in Lambda env), **tags**, then `terraform init && terraform apply`.
