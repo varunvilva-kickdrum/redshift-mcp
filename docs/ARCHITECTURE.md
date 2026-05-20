@@ -116,33 +116,33 @@ Every tool call that passes the Function URL travels through seven sequential ga
 
 ```mermaid
 flowchart TD
-    A["📥 Incoming Request\nPOST /mcp\nAuthorization: Bearer JWT"] --> S1
+    A["📥 Incoming Request\nPOST /mcp\nAuthorization: Bearer JWT"] --> JWTVerify
 
-    S1["① JWT Verify\nauth0_jwt.py\n─────────────────\n• Extract kid from JWT header\n• Fetch Auth0 JWKS public key (cached 1 hr)\n• Verify RS256 signature, expiry, audience\n• Extract sub → unique user ID\n• Extract tier claim → free / premium / analyst"]
-    S1 -->|"❌ Invalid token"| E1["HTTP 401 Unauthorized\nRequest stops"]
-    S1 -->|"✅ sub + tier known"| S2
+    JWTVerify["① JWT Verify\nauth0_jwt.py\n─────────────────\n• Extract kid from JWT header\n• Fetch Auth0 JWKS public key (cached 1 hr)\n• Verify RS256 signature, expiry, audience\n• Extract sub → unique user ID\n• Extract tier claim → free / premium / analyst"]
+    JWTVerify -->|"❌ Invalid token"| E1["HTTP 401 Unauthorized\nRequest stops"]
+    JWTVerify -->|"✅ sub + tier known"| TierGate
 
-    S2["② Tier Gate\ntiers.py\n─────────────────\n• Look up TOOL_MIN_TIER for this tool\n• Compare TIER_RANK[user_tier] ≥ TIER_RANK[required]\n• free=0  premium=1  analyst=2"]
-    S2 -->|"❌ Tier too low"| E2["HTTP 403 Tier Forbidden\nRequest stops"]
-    S2 -->|"✅ Tier sufficient"| S3
+    TierGate["② Tier Gate\ntiers.py\n─────────────────\n• Look up TOOL_MIN_TIER for this tool\n• Compare TIER_RANK[user_tier] ≥ TIER_RANK[required]\n• free=0  premium=1  analyst=2"]
+    TierGate -->|"❌ Tier too low"| E2["HTTP 403 Tier Forbidden\nRequest stops"]
+    TierGate -->|"✅ Tier sufficient"| RateLimit
 
-    S3["③ Rate Limit\nratelimit.py\n─────────────────\n• key = (sub, UTC-hour-bucket e.g. 2026-05-20T07)\n• DynamoDB UpdateItem: call_count += 1\n• ConditionExpression: call_count < tier_limit\n• free=30  premium=150  analyst=500 per hour"]
-    S3 -->|"❌ Limit exceeded"| E3["HTTP 429 + Retry-After\n(seconds to next UTC hour)\nRequest stops"]
-    S3 -->|"✅ Under limit"| S4
+    RateLimit["③ Rate Limit\nratelimit.py\n─────────────────\n• key = (sub, UTC-hour-bucket e.g. 2026-05-20T07)\n• DynamoDB UpdateItem: call_count += 1\n• ConditionExpression: call_count < tier_limit\n• free=30  premium=150  analyst=500 per hour"]
+    RateLimit -->|"❌ Limit exceeded"| E3["HTTP 429 + Retry-After\n(seconds to next UTC hour)\nRequest stops"]
+    RateLimit -->|"✅ Under limit"| TTLCache
 
-    S4["④ TTL Cache\ntool_cache.py\n─────────────────\n• cache_key = SHA-256(tool_name + sorted args)\n• Check in-process fresh store\n• TTLs: catalog=5 min  tables=2 min  data=1 min"]
-    S4 -->|"✅ Cache HIT"| R["Return cached result\naudit: cache_hit=true"]
-    S4 -->|"❌ Cache MISS"| S5
+    TTLCache["④ TTL Cache\ntool_cache.py\n─────────────────\n• cache_key = SHA-256(tool_name + sorted args)\n• Check in-process fresh store\n• TTLs: catalog=5 min  tables=2 min  data=1 min"]
+    TTLCache -->|"✅ Cache HIT"| R["Return cached result\naudit: cache_hit=true"]
+    TTLCache -->|"❌ Cache MISS"| SqlglotSafety
 
-    S5["⑤ sqlglot Safety\nsafety.py  ← run_select_query only\n─────────────────\n• Parse SQL into AST (Redshift dialect)\n• Allow only SELECT / UNION at root\n• Walk entire AST: block INSERT/UPDATE/DELETE/DROP/etc\n• Block dangerous functions: pg_terminate_backend etc\n• Inject or clamp LIMIT ≤ MAX_ROWS_RETURNED"]
-    S5 -->|"❌ Unsafe SQL"| E5["HTTP 400 Unsafe Query\nRequest stops"]
-    S5 -->|"✅ Safe SQL"| S6
+    SqlglotSafety["⑤ sqlglot Safety\nsafety.py  ← run_select_query only\n─────────────────\n• Parse SQL into AST (Redshift dialect)\n• Allow only SELECT / UNION at root\n• Walk entire AST: block INSERT/UPDATE/DELETE/DROP/etc\n• Block dangerous functions: pg_terminate_backend etc\n• Inject or clamp LIMIT ≤ MAX_ROWS_RETURNED"]
+    SqlglotSafety -->|"❌ Unsafe SQL"| E5["HTTP 400 Unsafe Query\nRequest stops"]
+    SqlglotSafety -->|"✅ Safe SQL"| RedshiftExec
 
-    S6["⑥ Redshift\ndb.py\n─────────────────\n• Execute parameterised SQL\n• On success: store in fresh + stale cache\n• On error: check stale cache\n  → serve stale if available (audit: stale_fallback=true)\n  → error if no stale entry"]
-    S6 --> S7
+    RedshiftExec["⑥ Redshift\ndb.py\n─────────────────\n• Execute parameterised SQL\n• On success: store in fresh + stale cache\n• On error: check stale cache\n  → serve stale if available (audit: stale_fallback=true)\n  → error if no stale entry"]
+    RedshiftExec --> AuditLog
 
-    S7["⑦ Audit Log\naudit.py\n─────────────────\n• Non-blocking background queue (daemon thread)\n• JSON line to stdout → CloudWatch Logs\n• Fields: ts ISO-8601  user_id  tier  tool\n  cache_hit  stale_fallback  duration_ms  ok  error"]
-    S7 --> R2["✅ MCP tool result returned to client"]
+    AuditLog["⑦ Audit Log\naudit.py\n─────────────────\n• Non-blocking background queue (daemon thread)\n• JSON line to stdout → CloudWatch Logs\n• Fields: ts ISO-8601  user_id  tier  tool\n  cache_hit  stale_fallback  duration_ms  ok  error"]
+    AuditLog --> R2["✅ MCP tool result returned to client"]
 
     style E1 fill:#fee2e2,stroke:#dc2626,color:#7f1d1d
     style E2 fill:#fee2e2,stroke:#dc2626,color:#7f1d1d
@@ -150,13 +150,13 @@ flowchart TD
     style E5 fill:#fee2e2,stroke:#dc2626,color:#7f1d1d
     style R  fill:#dcfce7,stroke:#16a34a,color:#14532d
     style R2 fill:#dcfce7,stroke:#16a34a,color:#14532d
-    style S1 fill:#eff6ff,stroke:#3b82f6,color:#1e3a5f
-    style S2 fill:#eff6ff,stroke:#3b82f6,color:#1e3a5f
-    style S3 fill:#eff6ff,stroke:#3b82f6,color:#1e3a5f
-    style S4 fill:#eff6ff,stroke:#3b82f6,color:#1e3a5f
-    style S5 fill:#eff6ff,stroke:#3b82f6,color:#1e3a5f
-    style S6 fill:#eff6ff,stroke:#3b82f6,color:#1e3a5f
-    style S7 fill:#f5f3ff,stroke:#7c3aed,color:#2e1065
+    style JWTVerify fill:#eff6ff,stroke:#3b82f6,color:#1e3a5f
+    style TierGate fill:#eff6ff,stroke:#3b82f6,color:#1e3a5f
+    style RateLimit fill:#eff6ff,stroke:#3b82f6,color:#1e3a5f
+    style TTLCache fill:#eff6ff,stroke:#3b82f6,color:#1e3a5f
+    style SqlglotSafety fill:#eff6ff,stroke:#3b82f6,color:#1e3a5f
+    style RedshiftExec fill:#eff6ff,stroke:#3b82f6,color:#1e3a5f
+    style AuditLog fill:#f5f3ff,stroke:#7c3aed,color:#2e1065
 ```
 
 | Step | File | Key identifier used |
