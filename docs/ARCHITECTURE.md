@@ -110,6 +110,65 @@ sequenceDiagram
   FN->>FN: Emit audit JSON to CloudWatch via stdout
 ```
 
+### Lambda Internal Pipeline — 7 Steps per Tool Call
+
+Every tool call that passes the Function URL travels through seven sequential gates inside the Lambda container:
+
+```mermaid
+flowchart TD
+    A["📥 Incoming Request\nPOST /mcp\nAuthorization: Bearer JWT"] --> S1
+
+    S1["① JWT Verify\nauth0_jwt.py\n─────────────────\n• Extract kid from JWT header\n• Fetch Auth0 JWKS public key (cached 1 hr)\n• Verify RS256 signature, expiry, audience\n• Extract sub → unique user ID\n• Extract tier claim → free / premium / analyst"]
+    S1 -->|"❌ Invalid token"| E1["HTTP 401 Unauthorized\nRequest stops"]
+    S1 -->|"✅ sub + tier known"| S2
+
+    S2["② Tier Gate\ntiers.py\n─────────────────\n• Look up TOOL_MIN_TIER for this tool\n• Compare TIER_RANK[user_tier] ≥ TIER_RANK[required]\n• free=0  premium=1  analyst=2"]
+    S2 -->|"❌ Tier too low"| E2["HTTP 403 Tier Forbidden\nRequest stops"]
+    S2 -->|"✅ Tier sufficient"| S3
+
+    S3["③ Rate Limit\nratelimit.py\n─────────────────\n• key = (sub, UTC-hour-bucket e.g. 2026-05-20T07)\n• DynamoDB UpdateItem: call_count += 1\n• ConditionExpression: call_count < tier_limit\n• free=30  premium=150  analyst=500 per hour"]
+    S3 -->|"❌ Limit exceeded"| E3["HTTP 429 + Retry-After\n(seconds to next UTC hour)\nRequest stops"]
+    S3 -->|"✅ Under limit"| S4
+
+    S4["④ TTL Cache\ntool_cache.py\n─────────────────\n• cache_key = SHA-256(tool_name + sorted args)\n• Check in-process fresh store\n• TTLs: catalog=5 min  tables=2 min  data=1 min"]
+    S4 -->|"✅ Cache HIT"| R["Return cached result\naudit: cache_hit=true"]
+    S4 -->|"❌ Cache MISS"| S5
+
+    S5["⑤ sqlglot Safety\nsafety.py  ← run_select_query only\n─────────────────\n• Parse SQL into AST (Redshift dialect)\n• Allow only SELECT / UNION at root\n• Walk entire AST: block INSERT/UPDATE/DELETE/DROP/etc\n• Block dangerous functions: pg_terminate_backend etc\n• Inject or clamp LIMIT ≤ MAX_ROWS_RETURNED"]
+    S5 -->|"❌ Unsafe SQL"| E5["HTTP 400 Unsafe Query\nRequest stops"]
+    S5 -->|"✅ Safe SQL"| S6
+
+    S6["⑥ Redshift\ndb.py\n─────────────────\n• Execute parameterised SQL\n• On success: store in fresh + stale cache\n• On error: check stale cache\n  → serve stale if available (audit: stale_fallback=true)\n  → error if no stale entry"]
+    S6 --> S7
+
+    S7["⑦ Audit Log\naudit.py\n─────────────────\n• Non-blocking background queue (daemon thread)\n• JSON line to stdout → CloudWatch Logs\n• Fields: ts ISO-8601  user_id  tier  tool\n  cache_hit  stale_fallback  duration_ms  ok  error"]
+    S7 --> R2["✅ MCP tool result returned to client"]
+
+    style E1 fill:#fee2e2,stroke:#dc2626,color:#7f1d1d
+    style E2 fill:#fee2e2,stroke:#dc2626,color:#7f1d1d
+    style E3 fill:#fef3c7,stroke:#d97706,color:#78350f
+    style E5 fill:#fee2e2,stroke:#dc2626,color:#7f1d1d
+    style R  fill:#dcfce7,stroke:#16a34a,color:#14532d
+    style R2 fill:#dcfce7,stroke:#16a34a,color:#14532d
+    style S1 fill:#eff6ff,stroke:#3b82f6,color:#1e3a5f
+    style S2 fill:#eff6ff,stroke:#3b82f6,color:#1e3a5f
+    style S3 fill:#eff6ff,stroke:#3b82f6,color:#1e3a5f
+    style S4 fill:#eff6ff,stroke:#3b82f6,color:#1e3a5f
+    style S5 fill:#eff6ff,stroke:#3b82f6,color:#1e3a5f
+    style S6 fill:#eff6ff,stroke:#3b82f6,color:#1e3a5f
+    style S7 fill:#f5f3ff,stroke:#7c3aed,color:#2e1065
+```
+
+| Step | File | Key identifier used |
+|------|------|---------------------|
+| ① JWT Verify | `auth0_jwt.py` | `kid` → JWKS key; `sub` → user identity; tier claim → access level |
+| ② Tier Gate | `tiers.py` | `TOOL_MIN_TIER[tool_name]` vs `TIER_RANK[user_tier]` |
+| ③ Rate Limit | `ratelimit.py` | DynamoDB `pk=sub, sk=UTC-hour`; limit from `tier_hourly_limit(tier)` |
+| ④ TTL Cache | `tool_cache.py` | `SHA-256(tool_name + sorted_args)`; separate fresh + stale stores |
+| ⑤ sqlglot Safety | `safety.py` | AST node types; `BLOCKED_DESCENDANT_TYPES`; `BLOCKED_FUNCTION_NAMES` |
+| ⑥ Redshift | `db.py` | Parameterised SQL only; stale fallback on upstream errors |
+| ⑦ Audit Log | `audit.py` | Background daemon thread; JSON → stdout → CloudWatch |
+
 ### Local MCP (stdio)
 
 ```mermaid
@@ -180,17 +239,45 @@ Rate-limit denials return JSON-RPC `-32029`, mapped to **HTTP 429** with `Retry-
 
 ## Cost Envelope
 
-Approximate steady-state cost at low traffic (no always-on compute except Redshift itself):
+All prices are **us-east-1** on-demand rates (May 2026). No reserved capacity or savings plans assumed.
 
-| AWS Item | Monthly Estimate |
-|----------|------------------|
-| Lambda (requests + GB-seconds) | Free tier or low single-digit USD for demos |
-| Lambda Function URL | No separate charge beyond Lambda invocations |
-| DynamoDB on-demand (rate table) | Usually under **$1** for light use |
-| CloudWatch Logs | Free tier / cents for 14-day retention |
-| Secrets Manager | ~**$0.40** per secret |
-| ECR storage | Cents to low USD depending on image size |
-| **Redshift cluster** | Dominant cost (not provisioned by this Terraform) |
+### Pricing reference
+
+| Service | Rate | Free tier |
+|---------|------|-----------|
+| Lambda requests | $0.20 / 1 M requests | 1 M req / month (permanent) |
+| Lambda duration (x86, 1 GB) | $0.0000166667 / GB-s | 400 K GB-s / month (permanent) |
+| Lambda Function URL | No additional charge | — |
+| DynamoDB on-demand — write | $1.25 / 1 M WRU | 25 WCU provisioned free (permanent) |
+| DynamoDB on-demand — read | $0.25 / 1 M RRU | 25 RCU provisioned free (permanent) |
+| DynamoDB storage | $0.25 / GB-month | 25 GB / month free |
+| CloudWatch Logs ingestion | $0.50 / GB | 5 GB / month free |
+| CloudWatch Logs storage | $0.03 / GB-month | 5 GB / month free |
+| Secrets Manager | $0.40 / secret / month + $0.05 / 10 K API calls | — |
+| ECR private storage | $0.10 / GB-month | 500 MB / month free (12 months, new accounts) — your 247 MB image is fully covered |
+
+> Assumptions per invocation: **1 GB Lambda memory**, **~1 s average duration** (catalog tools ~300 ms, SQL queries ~2–3 s; blended ~1 s), **1 DynamoDB write** (rate counter) + **1 DynamoDB read** (stale fallback check), **~4 KB CloudWatch log line** per call.
+
+---
+
+### Monthly cost by traffic tier
+
+| Line item | **Demo / Hackathon** ≤ 3 K calls/mo | **Small team** ~15 K calls/mo | **Moderate production** ~300 K calls/mo |
+|-----------|--------------------------------------|-------------------------------|------------------------------------------|
+| Lambda requests | **$0.00** (free tier) | **$0.00** (free tier) | **$0.00** (free tier — 1 M limit) |
+| Lambda duration (1 GB × ~1 s) | **$0.00** (free tier — 3 K GB-s) | **$0.00** (free tier — 15 K GB-s) | **$0.00** (free tier — 300 K GB-s) |
+| DynamoDB WRU (3 K / 15 K / 300 K) | **< $0.01** | **$0.02** | **$0.38** |
+| DynamoDB RRU | **< $0.01** | **< $0.01** | **$0.08** |
+| CloudWatch Logs (~12 KB/call) | **$0.00** (free tier — ~36 MB) | **$0.00** (free tier — ~180 MB) | **$0.00** (free tier — ~3.6 GB within 5 GB) |
+| Secrets Manager (1 secret) | **$0.40** | **$0.40** | **$0.40** |
+| ECR private storage (~247 MB image) | **$0.025** (free if acct < 12 mo) | **$0.025** | **$0.025** |
+| **Total (excl. Redshift)** | **≈ $0.43 / mo** | **≈ $0.45 / mo** | **≈ $0.88 / mo** |
+
+> **Redshift** is the dominant cost and is **not provisioned by this Terraform**.  A `dc2.large` single-node cluster costs ~$0.25/hr ≈ **$182/month** (always-on). Redshift Serverless scales to zero when idle and charges $0.36/RPU-hour; for burst-only demo usage this is effectively **$0** between tests.
+
+### Free-tier note
+
+The Lambda invocation + duration free tier (1 M req + 400 K GB-s) is permanent for all AWS accounts. At 1 GB memory / 1 s average, the Lambda compute for this server stays **entirely within the free tier up to ~400 K calls per month** — meaning the effective cost of the MCP layer for any demo or moderate team is essentially just the $0.40/month Secrets Manager secret plus a few cents of ECR storage.
 
 ## Production Gaps
 
