@@ -279,15 +279,3 @@ All prices are **us-east-1** on-demand rates (May 2026). No reserved capacity or
 
 The Lambda invocation + duration free tier (1 M req + 400 K GB-s) is permanent for all AWS accounts. At 1 GB memory / 1 s average, the Lambda compute for this server stays **entirely within the free tier up to ~400 K calls per month** — meaning the effective cost of the MCP layer for any demo or moderate team is essentially just the $0.40/month Secrets Manager secret plus a few cents of ECR storage.
 
-## Production Gaps
-
-| Gap | Production Direction |
-|-----|----------------------|
-| **SQL safety relies on sqlglot** | Defense in depth: read-only DB user, schema allowlists, query logging review. |
-| **Function URL is public (app-layer auth only)** | Add CloudFront + WAF, or migrate to API Gateway with throttling. |
-| **Per-instance cache** | Accept for catalog tools or add ElastiCache/DynamoDB L2 if cross-instance consistency is required. |
-| **Rate limit fails open on DynamoDB errors** | Monitor DynamoDB health; consider fail-closed for abuse-sensitive deployments. |
-| **Lambda cold starts** | Enable provisioned concurrency if first-request latency is critical. |
-| **VPC + DynamoDB** | Add DynamoDB gateway VPC endpoint (or NAT) when Lambda runs in private subnets. |
-| **Audit in CloudWatch only** | Ship logs to S3/OpenSearch for long-term retention; avoid sensitive SQL in shared log streams. |
-| **Auth0 tier changes require re-auth** | Users must reconnect their MCP connector after `app_metadata.tier` changes. |
